@@ -39,11 +39,11 @@ The skill checks its environment before a run and does not install packages with
 Invoke it explicitly:
 
 ```text
-$investment-council 分析苹果当前的投资与交易价值
-$investment-council 筛选 AI 数据中心供电产业链，并给出经过完整委员会讨论的候选
+$investment-council Analyze Apple's current investment and trading case
+$investment-council Research the data-center power chain and complete councils on the finalists
 ```
 
-For an unqualified “U.S.-listed” or “美股” request, the default security boundary is common shares and direct ADR/ADS listed on Nasdaq, NYSE, or NYSE American. OTC securities and funds are excluded unless the request explicitly includes them. Theme runs default to a 3–12 month research horizon unless the user supplies another horizon.
+When a United States market scope omits venue details, the default security boundary is common shares and direct ADR/ADS listed on Nasdaq, NYSE, or NYSE American. OTC securities and funds are excluded unless explicitly included. Theme runs default to a 3–12 month research horizon unless another horizon is supplied.
 
 It supports:
 
@@ -53,7 +53,7 @@ It supports:
 - Early candidate identity, liquidity, and lightweight market-data auditing
 - A shared macro snapshot with VIX, U.S. 2-year and 10-year Treasury yields, 2s10s, DXY, optional issuer-relevant FX, 20/60-session changes, and 252-session percentiles
 - Per-instrument RSI, moving-average, MACD, ATR, price/RSI/ATR percentile, slope, relative-strength, and trend-regime analysis
-- Two-stage screening that locks either a full-universe or resolved-subset discovery baseline before company decisions, preserves atomic-path membership and unresolved research leads, follows non-terminal corporate actions to the cutoff, forbids invented liquidity gates, and requires expectations, valuation, catalysts, downside, and like-for-like nearest-alternative comparisons before advancement
+- Candidate-pool and coarse-screening controls that lock either a full-universe or resolved-subset discovery baseline before company decisions, preserve atomic-path membership and unresolved research leads, follow non-terminal corporate actions to the cutoff, forbid invented liquidity gates, and require expectations, valuation, catalysts, downside, and like-for-like nearest-alternative comparisons before advancement
 - User-supplied company comparisons
 - Evidence-backed Bull/Bear debate, risk review, and portfolio conclusions
 - Current or historical analysis with a fixed evidence cutoff

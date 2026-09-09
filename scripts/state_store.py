@@ -49,11 +49,43 @@ EVIDENCE_KINDS = {
 EVIDENCE_SCOPES = {"shared", "candidate"}
 ARTIFACT_PROFILES = {"compact", "audit"}
 STAGE_STORE_FILENAME = "stages.json"
+RATINGS = {"Buy", "Overweight", "Hold", "Underweight", "Sell"}
+EXPOSURE_INTENTS = {
+    "open_long", "add_long", "hold", "reduce_long", "close_long",
+    "open_short", "add_short", "reduce_short", "close_short", "avoid",
+}
+TRADER_ACTIONS = {"Buy", "Hold", "Sell"}
+CONFIDENCE_LEVELS = {"low", "medium", "high"}
+CONTEXT_EFFECTS = {
+    "supportive", "neutral", "adverse", "mixed", "unavailable",
+    "insufficient_history",
+}
+SIZING_BASES = {"none", "risk_units", "portfolio_context"}
 REQUIRED_PACKAGES = ("numpy", "pandas", "yfinance", "certifi")
 FORBIDDEN_SCRIPT_PATTERNS = (
     re.compile(r"(^|\n)\s*(from|import)\s+(openai|anthropic|langchain)", re.I),
     re.compile(r"\b((subprocess|system|popen|run)\b.*\bcodex|codex\b.*\b(subprocess|system|popen|run))\b", re.I),
     re.compile(r"\b(chat\.completions|responses\.create|messages\.create)\b", re.I),
+)
+PERCENTAGE_VALUE = re.compile(r"(?<![\w.])\d+(?:\.\d+)?\s*%")
+PERCENTAGE_ONLY = re.compile(r"^\s*(?:[-*]\s*)?\d+(?:\.\d+)?\s*%\s*$")
+PERCENTAGE_SIZING_LABEL_TEXT = (
+    r"(?:(?:portfolio|position|suggested|target|hypothetical)\s+"
+    r"(?:weight|allocation|size|risk\s+budget)|"
+    r"(?:weight|allocation|risk\s+budget)|"
+    r"(?:建议|目标|假设|组合)?(?:仓位|权重|配置比例|风险预算)|配置)"
+)
+PERCENTAGE_SIZING_LABEL = re.compile(PERCENTAGE_SIZING_LABEL_TEXT, re.I)
+PERCENTAGE_SIZING_LABEL_ONLY = re.compile(
+    rf"^\s*{PERCENTAGE_SIZING_LABEL_TEXT}\s*[:：]?\s*$", re.I,
+)
+PERCENTAGE_SIZING_INLINE = re.compile(
+    rf"{PERCENTAGE_SIZING_LABEL_TEXT}"
+    rf"\s*(?:(?:[:：=]|is|of|at|为|是)\s*)?"
+    rf"(?:(?:should\s+)?(?:not\s+exceed|be)\s*)?"
+    rf"(?:(?:no\s+more\s+than|up\s+to|about|approximately|around|约|不超过)\s*)?"
+    rf"{PERCENTAGE_VALUE.pattern}",
+    re.I,
 )
 
 
@@ -185,6 +217,44 @@ def safe_component(value: str) -> str:
     return cleaned[:96]
 
 
+def contains_percentage_sizing(markdown: bytes) -> bool:
+    """Detect percentage position sizing while avoiding ordinary financial percentages."""
+    text = markdown.decode("utf-8", errors="replace")
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        if PERCENTAGE_SIZING_INLINE.search(line):
+            return True
+        if "|" in line:
+            headers = [cell.strip() for cell in line.strip().strip("|").split("|")]
+            sizing_columns = [
+                column for column, header in enumerate(headers)
+                if PERCENTAGE_SIZING_LABEL_ONLY.fullmatch(header)
+            ]
+            if not sizing_columns:
+                continue
+            for following in lines[index + 1:index + 20]:
+                if not following.strip() or "|" not in following:
+                    break
+                cells = [cell.strip() for cell in following.strip().strip("|").split("|")]
+                for column in sizing_columns:
+                    if column < len(cells) and PERCENTAGE_VALUE.search(cells[column]):
+                        return True
+        else:
+            heading = re.sub(r"^\s{0,3}#{1,6}\s*", "", line).strip()
+            if not PERCENTAGE_SIZING_LABEL_ONLY.fullmatch(heading):
+                continue
+            for following in lines[index + 1:index + 5]:
+                if not following.strip():
+                    continue
+                if PERCENTAGE_ONLY.match(following) or (
+                    re.match(r"^\s*[-*+]\s+", following)
+                    and PERCENTAGE_VALUE.search(following)
+                ):
+                    return True
+                break
+    return False
+
+
 def resume_signature(manifest: dict[str, Any]) -> str:
     keys = [
         "run_type", "research_mode", "theme", "comparison_label", "market",
@@ -197,6 +267,7 @@ def resume_signature(manifest: dict[str, Any]) -> str:
         "benchmark_ticker", "execution_mode_requested", "execution_mode_used",
         "macro_context_enabled", "macro_series", "macro_percentile_window",
         "technical_percentile_window",
+        "portfolio_context", "output_language",
         "prompt_reference_version", "prompt_reference_hash", "skill_version",
         "schema_version", "evidence_hash", "artifact_profile",
     ]
@@ -336,6 +407,9 @@ def validate_candidates(value: Any) -> list[dict[str, Any]]:
         ticker = candidate.get("requested_ticker")
         market = candidate.get("market")
         state = candidate.get("status")
+        transition_reason = candidate.get("transition_reason")
+        next_required_evidence = candidate.get("next_required_evidence")
+        atomic_path_ids = candidate.get("atomic_path_ids")
         if not isinstance(candidate_id, str) or not candidate_id.strip():
             raise ValueError("candidate_id must be a non-empty string")
         if not isinstance(ticker, str) or not ticker.strip():
@@ -344,6 +418,21 @@ def validate_candidates(value: Any) -> list[dict[str, Any]]:
             raise ValueError("candidate market must be a non-empty string")
         if state not in CANDIDATE_STATES:
             raise ValueError(f"invalid candidate status: {state}")
+        if not isinstance(transition_reason, str) or not transition_reason.strip():
+            raise ValueError(f"candidate lacks transition_reason: {candidate_id}")
+        if not isinstance(next_required_evidence, str) or not next_required_evidence.strip():
+            raise ValueError(f"candidate lacks next_required_evidence: {candidate_id}")
+        if (
+            not isinstance(atomic_path_ids, list)
+            or not atomic_path_ids
+            or not all(isinstance(item, str) and item.strip() for item in atomic_path_ids)
+            or len(set(atomic_path_ids)) != len(atomic_path_ids)
+        ):
+            raise ValueError(f"candidate has invalid atomic_path_ids: {candidate_id}")
+        if state in {"eliminated", "pending_verification"}:
+            reentry_condition = candidate.get("reentry_condition")
+            if not isinstance(reentry_condition, str) or not reentry_condition.strip():
+                raise ValueError(f"candidate lacks reentry_condition: {candidate_id}")
         if candidate_id in seen_ids:
             raise ValueError(f"duplicate candidate_id: {candidate_id}")
         normalized_ticker = ticker.upper()
@@ -352,6 +441,89 @@ def validate_candidates(value: Any) -> list[dict[str, Any]]:
         seen_ids.add(candidate_id)
         seen_tickers.add(normalized_ticker)
     return candidates
+
+
+def validate_final_decision(
+    value: Any,
+    manifest: dict[str, Any],
+    evidence: dict[str, Any],
+) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError("final decision must be an object")
+    if value.get("schema_version") != SCHEMA_VERSION:
+        raise ValueError("final decision schema_version must be 1.0")
+    if value.get("rating") not in RATINGS:
+        raise ValueError("final decision has invalid rating")
+    if value.get("exposure_intent") not in EXPOSURE_INTENTS:
+        raise ValueError("final decision has invalid exposure_intent")
+    if value.get("action") not in TRADER_ACTIONS:
+        raise ValueError("final decision has invalid action")
+    if value.get("confidence") not in CONFIDENCE_LEVELS:
+        raise ValueError("final decision has invalid confidence")
+    if value.get("macro_effect") not in CONTEXT_EFFECTS:
+        raise ValueError("final decision has invalid macro_effect")
+    if value.get("technical_effect") not in CONTEXT_EFFECTS:
+        raise ValueError("final decision has invalid technical_effect")
+    if value.get("sizing_basis") not in SIZING_BASES:
+        raise ValueError("final decision has invalid sizing_basis")
+    for field in ("decision_summary", "invalidation"):
+        if not isinstance(value.get(field), str) or not value[field].strip():
+            raise ValueError(f"final decision requires {field}")
+
+    usable = validate_evidence_bundle(evidence, manifest)
+    usable_by_id = {record["evidence_id"]: record for record in usable}
+    evidence_ids = value.get("evidence_ids")
+    if not isinstance(evidence_ids, list) or len(set(evidence_ids)) < 2 or not all(
+        isinstance(item, str) and item.strip() for item in evidence_ids
+    ):
+        raise ValueError("final decision requires at least two distinct evidence_ids")
+    missing = sorted(set(evidence_ids) - set(usable_by_id))
+    if missing:
+        raise ValueError("final decision references unavailable evidence: " + ", ".join(missing))
+    selected_records = [usable_by_id[item] for item in evidence_ids]
+    if value.get("macro_effect") != "unavailable" and not any(
+        record.get("field") == "macro_snapshot" for record in selected_records
+    ):
+        raise ValueError("available macro effect requires a cited macro_snapshot")
+    if value.get("technical_effect") != "unavailable" and not any(
+        record.get("field") == "technical_snapshot" for record in selected_records
+    ):
+        raise ValueError("available technical effect requires a cited technical_snapshot")
+
+    if manifest.get("parent_screening_run_id"):
+        candidate_id = manifest.get("candidate_id")
+        subjects = {
+            str(manifest.get("requested_ticker") or "").upper(),
+            str(manifest.get("canonical_ticker") or "").upper(),
+            *{
+                str(item).upper()
+                for item in manifest.get("relevant_subject_ids", [])
+            },
+        }
+        if not any(
+            record.get("scope") == "candidate"
+            and (
+                candidate_id in record.get("candidate_ids", [])
+                or str(record.get("subject_id") or "").upper() in subjects
+            )
+            for record in selected_records
+        ):
+            raise ValueError("final decision lacks candidate-specific frozen evidence")
+
+    portfolio_context = manifest.get("portfolio_context")
+    user_portfolio_context = (
+        isinstance(portfolio_context, dict)
+        and portfolio_context.get("provided_by_user") is True
+    )
+    if value.get("sizing_basis") == "portfolio_context" and not user_portfolio_context:
+        raise ValueError("portfolio_context sizing requires user-provided portfolio context")
+    if value.get("suggested_weight_percent") is not None:
+        weight = value["suggested_weight_percent"]
+        if not user_portfolio_context:
+            raise ValueError("percentage weights require user-provided portfolio context")
+        if isinstance(weight, bool) or not isinstance(weight, (int, float)) or not 0 <= weight <= 100:
+            raise ValueError("suggested_weight_percent must be between 0 and 100")
+    return value
 
 
 def validate_discovery_baseline(value: Any, manifest: dict[str, Any]) -> list[dict[str, Any]]:
@@ -585,7 +757,111 @@ def validate_finalists(value: Any, candidates: list[dict[str, Any]]) -> list[dic
         seen_ids.add(candidate_id)
         seen_tickers.add(normalized_ticker)
         seen_child_paths.add(child_path)
+    advanced_ids = {
+        candidate["candidate_id"]
+        for candidate in candidates
+        if candidate.get("status") == "advanced"
+    }
+    if seen_ids != advanced_ids:
+        details = []
+        missing = sorted(advanced_ids - seen_ids)
+        unexpected = sorted(seen_ids - advanced_ids)
+        if missing:
+            details.append("missing: " + ", ".join(missing))
+        if unexpected:
+            details.append("unexpected: " + ", ".join(unexpected))
+        raise ValueError(
+            "finalist set must exactly match advanced candidates (" + "; ".join(details) + ")"
+        )
     return finalists
+
+
+def run_tree_errors(run_dir: Path, manifest: dict[str, Any]) -> list[str]:
+    """Reject duplicate or ad hoc run artifacts outside the selected profile."""
+    profile = manifest.get("artifact_profile", "compact")
+    run_type = manifest.get("run_type", "instrument")
+    allowed_files = {
+        "manifest.json", "state.json", "evidence.json", "complete_report.md",
+    }
+    allowed_nested_files: set[str] = set()
+    if profile == "compact":
+        allowed_files.add(STAGE_STORE_FILENAME)
+    else:
+        state_path = run_dir / "state.json"
+        state = load(state_path) if state_path.exists() else {}
+        for entry in state.get("artifacts", {}).values():
+            if isinstance(entry, dict) and entry.get("storage") == "file":
+                path = entry.get("path")
+                if isinstance(path, str) and "/" in path:
+                    allowed_nested_files.add(path)
+        if run_type == "instrument":
+            allowed_nested_files.update({
+                "1_analysts/market.md", "1_analysts/sentiment.md",
+                "1_analysts/news.md", "1_analysts/fundamentals.md",
+                "2_research/bull.md", "2_research/bear.md",
+                "2_research/manager.md", "3_trading/trader.md",
+                "4_risk/aggressive.md", "4_risk/conservative.md",
+                "4_risk/neutral.md", "5_portfolio/decision.md",
+            })
+        else:
+            allowed_nested_files.update({
+                "0_screening/scope.md", "0_screening/system_map.md",
+                "0_screening/candidate_ledger.md", "0_screening/shortlist.md",
+            })
+            allowed_files.add("comparison.md")
+    if run_type == "screening":
+        allowed_files.update({"candidates.json", "finalists.json"})
+
+    errors: list[str] = []
+    for entry in run_dir.iterdir():
+        if entry.name == ".DS_Store":
+            continue
+        if entry.is_symlink():
+            errors.append(f"unexpected run symlink: {entry.name}")
+            continue
+        if entry.is_file() and entry.name not in allowed_files:
+            errors.append(f"unexpected run file for {profile} profile: {entry.name}")
+        elif entry.is_dir():
+            allowed_directory = entry.name == "candidates" and run_type == "screening"
+            allowed_directory = allowed_directory or any(
+                path.startswith(entry.name + "/") for path in allowed_nested_files
+            )
+            if not allowed_directory:
+                errors.append(f"unexpected run directory for {profile} profile: {entry.name}")
+
+    if profile == "audit":
+        for entry in run_dir.rglob("*"):
+            relative = entry.relative_to(run_dir).as_posix()
+            if relative == "candidates" or relative.startswith("candidates/"):
+                continue
+            if entry.is_symlink():
+                errors.append(f"unexpected run symlink: {relative}")
+            elif entry.is_file() and "/" in relative and relative not in allowed_nested_files:
+                errors.append(f"unexpected nested run file for audit profile: {relative}")
+            elif entry.is_dir() and not any(
+                path == relative or path.startswith(relative + "/")
+                for path in allowed_nested_files
+            ):
+                errors.append(f"unexpected nested run directory for audit profile: {relative}")
+
+    if run_type == "screening" and (run_dir / "candidates").exists():
+        finalists_path = run_dir / "finalists.json"
+        expected_children: set[str] = set()
+        if finalists_path.exists():
+            for finalist in load(finalists_path).get("finalists", []):
+                ticker = finalist.get("canonical_ticker") or finalist.get("requested_ticker")
+                if ticker:
+                    expected_children.add(safe_component(str(ticker)))
+        for entry in (run_dir / "candidates").iterdir():
+            if entry.is_symlink() or not entry.is_dir() or entry.name not in expected_children:
+                errors.append(f"unexpected finalist child path: candidates/{entry.name}")
+    return errors
+
+
+def require_clean_run_tree(run_dir: Path, manifest: dict[str, Any]) -> None:
+    errors = run_tree_errors(run_dir, manifest)
+    if errors:
+        raise ValueError("run tree violates artifact profile: " + "; ".join(errors))
 
 
 def verify_errors(run_dir: Path) -> list[str]:
@@ -595,7 +871,7 @@ def verify_errors(run_dir: Path) -> list[str]:
         return ["manifest.json or state.json is missing"]
     manifest = load(manifest_path)
     state = load(state_path)
-    errors: list[str] = []
+    errors: list[str] = run_tree_errors(run_dir, manifest)
     if state.get("run_id") != manifest.get("run_id"):
         errors.append("state run_id mismatch")
     if state.get("manifest_hash") != digest(manifest):
@@ -684,6 +960,22 @@ def verify_errors(run_dir: Path) -> list[str]:
         ready, pending = child_runs_terminal(run_dir)
         if not ready:
             errors.append("child runs are not terminal and valid: " + ", ".join(pending))
+    if manifest.get("run_type", "instrument") == "instrument":
+        decision = state.get("final_decision")
+        decision_hash = state.get("final_decision_hash")
+        decision_required = state.get("lifecycle") in {
+            "decision_ready", "decision_registered", "complete",
+        }
+        if decision_required and (decision is None or decision_hash is None):
+            errors.append("registered final decision is missing")
+        elif decision is not None:
+            if decision_hash != digest(decision):
+                errors.append("final decision hash mismatch")
+            elif evidence_path.exists():
+                try:
+                    validate_final_decision(decision, manifest, load(evidence_path))
+                except ValueError as exc:
+                    errors.append(f"invalid final decision: {exc}")
     if state.get("lifecycle") == "complete" and completed != order:
         errors.append("complete lifecycle missing or unordered stages")
     if state.get("lifecycle") == "failed" and not state.get("failure"):
@@ -803,6 +1095,12 @@ def command_init(args: argparse.Namespace) -> int:
             isinstance(item, str) and item.strip() for item in subjects
         ):
             raise ValueError("relevant_subject_ids must be a non-empty string array")
+    if "portfolio_context" in seed:
+        portfolio_context = seed["portfolio_context"]
+        if not isinstance(portfolio_context, dict):
+            raise ValueError("portfolio_context must be an object when provided")
+        if portfolio_context.get("provided_by_user") is not True:
+            raise ValueError("portfolio_context must explicitly record provided_by_user: true")
     cutoff = datetime.fromisoformat(str(seed["analysis_cutoff"]).replace("Z", "+00:00"))
     if cutoff.tzinfo is None:
         raise ValueError("analysis_cutoff must be timezone-aware")
@@ -820,6 +1118,9 @@ def command_init(args: argparse.Namespace) -> int:
         manifest.setdefault("include_otc", False)
         manifest.setdefault("include_funds", False)
     manifest.setdefault("artifact_profile", "compact")
+    manifest.setdefault("output_language", "en")
+    if not isinstance(manifest["output_language"], str) or not manifest["output_language"].strip():
+        raise ValueError("output_language must be a non-empty string")
     manifest.setdefault("macro_context_enabled", True)
     manifest.setdefault("macro_percentile_window", 252)
     manifest.setdefault("technical_percentile_window", 252)
@@ -838,7 +1139,7 @@ def command_init(args: argparse.Namespace) -> int:
         manifest.setdefault("investment_debate_rounds", 1)
         manifest.setdefault("risk_debate_rounds", 1)
     manifest.setdefault("schema_version", SCHEMA_VERSION)
-    manifest.setdefault("skill_version", "0.3.0")
+    manifest.setdefault("skill_version", "0.4.0")
     manifest.setdefault("created_at", datetime.now(timezone.utc).isoformat())
     manifest["run_id"] = manifest.get("run_id") or digest({
         "subject": manifest.get("requested_ticker") or manifest.get("theme") or manifest.get("comparison_label"),
@@ -859,6 +1160,8 @@ def command_init(args: argparse.Namespace) -> int:
         "discovery_baseline": None,
         "candidates_hash": None,
         "finalists_hash": None,
+        "final_decision_hash": None,
+        "final_decision": None,
         "updated_at": manifest["created_at"],
     }
     if run_dir.exists() and any(run_dir.iterdir()):
@@ -872,6 +1175,7 @@ def command_init(args: argparse.Namespace) -> int:
 def command_baseline(args: argparse.Namespace) -> int:
     run_dir = Path(args.run_dir).resolve()
     manifest = load(run_dir / "manifest.json")
+    require_clean_run_tree(run_dir, manifest)
     state_path = run_dir / "state.json"
     state = load(state_path)
     if manifest.get("run_type") != "screening" or manifest.get("research_mode") != "theme":
@@ -907,6 +1211,7 @@ def command_baseline(args: argparse.Namespace) -> int:
 def command_commit(args: argparse.Namespace) -> int:
     run_dir = Path(args.run_dir).resolve()
     manifest = load(run_dir / "manifest.json")
+    require_clean_run_tree(run_dir, manifest)
     state = load(run_dir / "state.json")
     if state.get("lifecycle") == "failed":
         raise ValueError("cannot commit to a failed run")
@@ -922,6 +1227,17 @@ def command_commit(args: argparse.Namespace) -> int:
         artifact = source.read_bytes()
     if not artifact.strip():
         raise ValueError("role artifact is empty")
+    portfolio_context = manifest.get("portfolio_context")
+    user_portfolio_context = (
+        isinstance(portfolio_context, dict)
+        and portfolio_context.get("provided_by_user") is True
+    )
+    if (
+        not user_portfolio_context
+        and args.stage in {"trader", "portfolio_manager", "comparison", "complete"}
+        and contains_percentage_sizing(artifact)
+    ):
+        raise ValueError("percentage portfolio sizing requires user-provided portfolio context")
     existing = state.get("artifacts", {}).get(args.stage)
     if existing:
         try:
@@ -934,6 +1250,12 @@ def command_commit(args: argparse.Namespace) -> int:
         raise ValueError(f"stage already committed with different content: {args.stage}")
     if not expected_stage(args.stage, state, manifest):
         raise ValueError(f"stage out of order: {args.stage}")
+    if (
+        args.stage == "complete"
+        and manifest.get("run_type", "instrument") == "instrument"
+        and not state.get("final_decision_hash")
+    ):
+        raise ValueError("register the final decision before completing an instrument run")
     update_lifecycle_after_commit(run_dir, state, manifest, args.stage)
     profile = manifest.get("artifact_profile", "compact")
     if args.stage == "complete":
@@ -986,6 +1308,7 @@ def command_freeze(args: argparse.Namespace) -> int:
     manifest_path = run_dir / "manifest.json"
     state_path = run_dir / "state.json"
     manifest = load(manifest_path)
+    require_clean_run_tree(run_dir, manifest)
     state = load(state_path)
     if state.get("lifecycle") == "failed":
         raise ValueError("cannot freeze a failed run")
@@ -1030,6 +1353,7 @@ def command_freeze(args: argparse.Namespace) -> int:
 def command_candidates(args: argparse.Namespace) -> int:
     run_dir = Path(args.run_dir).resolve()
     manifest = load(run_dir / "manifest.json")
+    require_clean_run_tree(run_dir, manifest)
     state_path = run_dir / "state.json"
     state = load(state_path)
     if manifest.get("run_type") != "screening":
@@ -1092,6 +1416,7 @@ def command_candidates(args: argparse.Namespace) -> int:
 def command_finalists(args: argparse.Namespace) -> int:
     run_dir = Path(args.run_dir).resolve()
     manifest = load(run_dir / "manifest.json")
+    require_clean_run_tree(run_dir, manifest)
     state_path = run_dir / "state.json"
     state = load(state_path)
     if manifest.get("run_type") != "screening":
@@ -1140,6 +1465,7 @@ def command_finalists(args: argparse.Namespace) -> int:
 def command_start_councils(args: argparse.Namespace) -> int:
     run_dir = Path(args.run_dir).resolve()
     manifest = load(run_dir / "manifest.json")
+    require_clean_run_tree(run_dir, manifest)
     state_path = run_dir / "state.json"
     state = load(state_path)
     if manifest.get("run_type") != "screening":
@@ -1156,6 +1482,41 @@ def command_start_councils(args: argparse.Namespace) -> int:
     state["updated_at"] = state["councils_started_at"]
     atomic_write(state_path, state)
     print(json.dumps({"lifecycle": state["lifecycle"]}))
+    return 0
+
+
+def command_decision(args: argparse.Namespace) -> int:
+    run_dir = Path(args.run_dir).resolve()
+    manifest = load(run_dir / "manifest.json")
+    require_clean_run_tree(run_dir, manifest)
+    state_path = run_dir / "state.json"
+    state = load(state_path)
+    if manifest.get("run_type", "instrument") != "instrument":
+        raise ValueError("final decision registration requires an instrument run")
+    value = load_json_source(args.input)
+    evidence_path = run_dir / "evidence.json"
+    if not evidence_path.exists():
+        raise ValueError("freeze evidence before registering a final decision")
+    validate_final_decision(value, manifest, load(evidence_path))
+    value_hash = digest(value)
+    if state.get("final_decision_hash"):
+        if state["final_decision_hash"] != value_hash:
+            raise ValueError("final decision is already registered with different content")
+        print(json.dumps({"final_decision_hash": value_hash}))
+        return 0
+    if state.get("lifecycle") != "decision_ready":
+        raise ValueError("complete the Portfolio Manager stage before registering a final decision")
+    state["final_decision_hash"] = value_hash
+    state["final_decision"] = value
+    state["lifecycle"] = "decision_registered"
+    state["updated_at"] = datetime.now(timezone.utc).isoformat()
+    atomic_write(state_path, state)
+    print(json.dumps({
+        "final_decision_hash": value_hash,
+        "rating": value["rating"],
+        "exposure_intent": value["exposure_intent"],
+        "confidence": value["confidence"],
+    }))
     return 0
 
 
@@ -1248,6 +1609,10 @@ def main() -> int:
     start_councils = sub.add_parser("start-councils")
     start_councils.add_argument("--run-dir", required=True)
     start_councils.set_defaults(func=command_start_councils)
+    decision = sub.add_parser("decision")
+    decision.add_argument("--run-dir", required=True)
+    decision.add_argument("--input", required=True, help="Final decision JSON path or - for stdin")
+    decision.set_defaults(func=command_decision)
     fail = sub.add_parser("fail")
     fail.add_argument("--run-dir", required=True)
     fail.add_argument("--stage", required=True)

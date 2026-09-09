@@ -8,20 +8,7 @@ Read identity, OHLCV, corporate actions, technical indicators, the verified mark
 
 Summarize the macro environment from VIX, rates, DXY, and any issuer-relevant FX series that were actually collected. State the level, 20/60-session change, historical percentile, and transmission to valuation, funding, demand, or translated earnings. Label the overall regime as risk-on, neutral, risk-off, or mixed as a Codex inference, not a deterministic fact. Missing macro observations reduce timing confidence rather than becoming neutral readings.
 
-Calculate the complete catalog once before freezing; discuss only indicators that add information:
-
-| Key | Calculation |
-|---|---|
-| `sma_50` | 50-session rolling mean of raw close |
-| `sma_200` | 200-session rolling mean of raw close |
-| `ema_10` | 10-session exponential mean of raw close |
-| `macd` | EMA 12 minus EMA 26, with signal and histogram |
-| `rsi_14` | 14-session Wilder RSI |
-| `bollinger` | 20-session mean ± 2 population standard deviations |
-| `atr_14` | 14-session Wilder true range |
-| `vwma_20` | 20-session volume-weighted moving average |
-
-The compact snapshot also reports 252-session price, RSI14, and ATR percentiles; 20-session SMA50 and SMA200 slopes; and one of `uptrend`, `recovery`, `range`, or `deteriorating` when sufficient history exists. Do not calculate without adequate warm-up or silently shorten the percentile window. Record parameters and price basis. End with separate compact macro and technical tables.
+Use the frozen technical catalog defined in [evidence](evidence.md) and calculated by `technical_analysis.py`. Discuss only indicators that add information. Do not shorten lookback windows silently or infer a precise entry from insufficient post-event price discovery. End with separate compact macro and technical conclusions.
 
 ## Sentiment Analyst
 
@@ -61,7 +48,7 @@ Read all analyst reports and the full debate. Choose one research rating: Buy, O
 
 Translate the plan into Buy, Hold, or Sell and clarify whether that means opening, adding, holding, reducing, closing, shorting, or avoiding exposure.
 
-Include entry approach, stop logic, target or exit conditions, horizon, liquidity, exit feasibility, and sizing guidance only when supported. State separately how macro conditions and technical regime change execution timing or size. Without portfolio context, express any sizing as a clearly hypothetical risk-unit example; do not invent concentration limits, existing-position thresholds, or executable quantities. Never assume Sell means opening a short.
+Include entry approach, stop logic, target or exit conditions, horizon, liquidity, exit feasibility, and sizing guidance only when supported. State separately how macro conditions and technical regime change execution timing or size. Without user-supplied portfolio context, express sizing only as risk units or conditional tranches; never output percentage portfolio weights, concentration limits, existing-position thresholds, or executable quantities. Never assume Sell means opening a short.
 
 ## Risk debate
 
@@ -77,7 +64,7 @@ For a long, a stop belongs below entry and target above it; reverse this for a s
 
 ## Portfolio Manager
 
-Synthesize research, Trader proposal, risk debate, eligible historical lessons, and the verified snapshot. Choose one final rating, one exposure intent from `open_long`, `add_long`, `hold`, `reduce_long`, `close_long`, `open_short`, `add_short`, `reduce_short`, `close_short`, or `avoid`, and one explicit confidence level. Explain any apparent conflict among the three rather than leaving the reader to infer it.
+Synthesize research, Trader proposal, risk debate, eligible historical lessons, and the verified snapshot. Choose one final rating, one Trader action from Buy, Hold, or Sell, one exposure intent from `open_long`, `add_long`, `hold`, `reduce_long`, `close_long`, `open_short`, `add_short`, `reduce_short`, `close_short`, or `avoid`, and one explicit confidence level. Explain any apparent conflict among them rather than leaving the reader to infer it. Register these fields with their frozen evidence IDs before report assembly.
 
 State thesis, value-chain position, management delivery, risks, optional supported target and horizon, liquidity, confidence, limitations, timeline, and invalidation. Reconcile four separate questions: whether the business merits exposure, whether valuation offers sufficient asymmetry, whether the macro regime changes the risk budget, and whether the technical regime supports acting now. Macro and technical evidence may change exposure intent, timing, and confidence without mechanically overriding the research rating. Every exact actionable number must be cited or labeled as a conditional scenario.
 

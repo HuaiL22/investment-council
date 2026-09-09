@@ -15,12 +15,12 @@ from typing import Any
 RATINGS = ("Buy", "Overweight", "Hold", "Underweight", "Sell")
 INTENTS = (
     "open_long", "add_long", "hold", "reduce_long", "close_long",
-    "open_short", "add_short", "reduce_short", "close_short", "no_trade",
+    "open_short", "add_short", "reduce_short", "close_short", "avoid", "no_trade",
 )
 ACTION_SIGN = {
     "open_long": 1, "add_long": 1, "reduce_short": 1, "close_short": 1,
     "open_short": -1, "add_short": -1, "reduce_long": -1, "close_long": -1,
-    "hold": 0, "no_trade": 0,
+    "hold": 0, "avoid": 0, "no_trade": 0,
 }
 
 
