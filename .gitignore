@@ -1,0 +1,14 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+.venv/
+investment-council-runs/
+.pytest_cache/
+*.tmp
+
+# Local-only development material; keep the published skill package lean.
+/AGENTS.md
+/NOTICE
+/agents/
+/docs/
+/tests/
